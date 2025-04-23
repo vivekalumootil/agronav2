@@ -1,6 +1,6 @@
 # Agronav2
 ## Running the Robot
-Please note that the Scout2 packages need to be installed first if you would like to use the Scout2. See the next section. The following commands will set up the Scout 2 Robot. 	
+1. Set up the Scout 2 (only if applicable)
     ```
     $ colcon build
     $ source install/setup.bash
@@ -8,13 +8,15 @@ Please note that the Scout2 packages need to be installed first if you would lik
     $ sudo ip link set can0 up type can bitrate 500000
     $ ros2 launch scout_base scout_base.launch.py
     ```
-These commands should be run on any robot. In another window, run
+
+2. In a separate window, run
     ```
     $ ros2 run webcam_publisher webcam_publisher_node
     ```
-and in another window, run
+
+3. In a separate window, run
     ```
-    $ ros2 run ad_mpc mpc 
+    $ ros2 run ad_mpc mpc
     ```
 
 ## ROS2 Packages for Scout Mobile Robot
