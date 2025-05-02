@@ -1,16 +1,6 @@
-# Vivek Alumootil
-# Last updated: 1/22/25
+# Last updated: 5/2/25
 
-# INSTRUCTIONS
-# source install/setup.bash (from agronav_ws_temp)
-# ros2 run ad_mpc mpc
-
-# DETAILS
-# [a, b, c] <=> ax+by+c=0
-
-# SETTINGS
-# MPC SETTINGS:
-# old = 7, 0.3
+# HYPERPARAMETERS
 hor = 20 # horizon length 
 ts = 0.2 # timestep
 
@@ -23,7 +13,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 
 # necessary to get certain python packages
-# do not add agronav_pytorch to PYTHONPATH in ~/.bashrc
+# this is necessary to get certain python packages and modules
 sys.path.append('/home/agribot2/Documents/Agronav/venv/lib/python3.8/site-packages')
 sys.path.append('/home/agribot2/scout2/src/ad_mpc/ad_mpc')
 sys.path.append('/home/agribot2/Documents/Agronav/agronav/lineDetection')
@@ -45,7 +35,6 @@ from skimage.measure import label, regionprops
 # mpc libraries
 import math
 from controller import Robot
-# from controller import Robotv2
 import time
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize, NonlinearConstraint
@@ -58,20 +47,24 @@ from utils import reverse_mapping, edge_align, get_boundary_point, visualize
 
 # root_path is the path to the agronav directory
 root_path = '/home/agribot2/Documents/Agronav/agronav/'
-# model_path = root_path + 'lineDetection/checkpoint/demo-ed.pth'
+
+# model_path is the path to the DHT checkpoint
 model_path = '/home/agribot2/checkpoints/chewy200-jan26th.pth'
+
 CONFIGS = yaml.full_load(open(root_path+'lineDetection/config.yml'))
 
 # Initialize Robot
 robot = Robot(ts, hor, np.array([0, 0, 0]))
-# robot = Robotv2(ts, hor, np.array([0, 0, 0]), 0.3)
 
 # Homography matrix
+# This assumes that the robot is flat (not tilted upwards or downwards)
 H = np.load('/home/agribot2/camera-info/homography.npy')  
 
+# unnecessary code -- will be removed eventually
 def get_ground_level_points(x0, y0, x1, y1):
     return np.array([[x0*0.95+x1*0.05, y0*0.95+y1*0.05], [x0*0.9+x1*0.1, y0*0.9+y1*0.1]])
 
+# in general, the line [a, b, c] represents ax+by+c=0
 def line_from_points(P1, P2):
     x1, y1 = P1
     x2, y2 = P2
@@ -94,22 +87,21 @@ def get_midline(L1, L2):
     slope_new = np.tan((slope1+slope2)/2)
     L3 = np.array([slope_new, -1, y1-slope_new*x1])
     return L3/slope_new
-    
+   
+# this converts an image coordate [x, y, 1] (OpenCV convention) to the coordinate (x, y) on the 2D ground plane relative to the robot
 def get_xy(imc):
     y = np.dot(H, np.append(imc, [1]))
     y = y/y[2]
     return y[:2]
 
-# generate model
+# load model
 model = Net(numAngle=CONFIGS["MODEL"]["NUMANGLE"], numRho=CONFIGS["MODEL"]["NUMRHO"], backbone=CONFIGS["MODEL"]["BACKBONE"])
 model = model.cuda(device=CONFIGS["TRAIN"]["GPU_ID"])
-
 checkpoint = torch.load(model_path)
 if 'state_dict' in checkpoint.keys():
     model.load_state_dict(checkpoint['state_dict'])
 else:
     model.load_state_dict(checkpoint)
-
 model.eval()
 transform = transforms.Compose([
 transforms.Resize((400, 400)),
@@ -134,10 +126,10 @@ class Model(Node):
         self.subscription  # prevent unused variable warning
         self.publisher_ = self.create_publisher(Image, output_name, 1)
         self.publisher_aud = self.create_publisher(Twist, 'cmd_vel', 1)
-        # instrs to send to controller
+        # movement instructions to send to controller
+        # [v1, v2], v1 is linear velocity, v2 is angular velocity (metric)
         self.u_queue = np.array([0, 0])
         self.m_queue = []
-        # adjustable (should be the same as MPC timestep)
         timer_period = ts
         self.timer = self.create_timer(timer_period, self.timer_callback)
         self.bridge = CvBridge()
@@ -149,24 +141,24 @@ class Model(Node):
             mov = self.m_queue.pop(0)
         else:
             self.get_logger().info(f'Error: Queue is empty')
+        # need to convert metric units to units the robot understands
         msg.linear.x = float(mov[0])
         msg.angular.z = float(2.56*mov[1])
+
         self.publisher_aud.publish(msg)
-        self.get_logger().info(f'NOTE: linear.x={msg.linear.x}, angular.z={msg.angular.z}')
+        self.get_logger().info(f'NOTE: Publishing linear.x={msg.linear.x}, angular.z={msg.angular.z}')
 
     def listener_callback(self, msg):
         try:    
             with torch.no_grad():
-                a1 = time.time()
+                time0 = time.time()
                 # Convert ROS Image message to OpenCV image
                 cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-                self.get_logger().info(f'NOTE: Publishing camera output to camera.jpg')
+                self.get_logger().info(f'NOTE: Writing camera output to camera.jpg')
                 cv2.imwrite('camera.jpg', cv_image)
                 img_height, img_width, img_channels = cv_image.shape
                 size = [img_height, img_width]
                 
-                # print('Received an image of size %d x %d' % (img_width, img_height))
-
                 # Inference
                 cv_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
 
@@ -201,18 +193,19 @@ class Model(Node):
                     (x1, y1), (x2, y2) = get_boundary_point(y1, x1, angle, size[0], size[1])
                     b_points[i] = (y1, x1, y2, x2)
 
-                a2 = time.time()
-                self.get_logger().info(f'NOTE: Inference elapsed time: {a2-a1}')
+                time1 = time.time()
+                self.get_logger().info(f'NOTE: Inference took: {time1-time0}s')
                 cv2_image_mapping = visualize(b_points, cv_image)
         
                 self.get_logger().info(f'NOTE: Writing mapping to dht.jpg')
                 cv2.imwrite('dht.jpg', cv2_image_mapping)
 
-                # model failure
                 if (len(b_points) < 2):
+                    # model failure
                     self.get_logger().info(f'ERROR: {len(b_points)} lines were detected')
                     return
                 elif (len(b_points) > 2):
+                    # model failure, but persist
                     self.get_logger().info(f'WARNING: {len(b_points)} lines were detected')
                     b_points = b_points[:2]
                 else:
